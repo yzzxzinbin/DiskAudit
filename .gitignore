@@ -1,0 +1,45 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 本机扫描产物：含账户名 / 盘符 / 完整目录结构，绝不入库 =====
+# data/  采集出来的数据源。按盘各一份：tree / links / meta / drive + history 快照，
+#        current.json 记录上次扫描的盘。
+# dist/  由数据源构建出的单文件报告
+/data/
+/dist/
+
+# ===== 文字层：按盘各一份，同样不入库 =====
+# content/drives/<盘>/purpose.json  目录用途知识库。启动时若不存在，purpose.ensure()
+#                       会用 scripts/purpose.py 的通用基础库现场建一份；
+#                       之后每填一次 ticket 就长一节，是纯本机积累。
+# content/drives/<盘>/report.json   报告文案骨架，report.seed() 按本次扫描现生成。
+# content/drives/<盘>/ticket.md     该盘的缺口清单，启动时现生成，补完自己消失。
+# content/linkextra.json            扫描器的可选输入（额外要测量的联接点），本机路径。
+#                       格式见 README「linkextra.json 有什么用」。
+# 这些文件都写着具体机器的软件清单、体积与真实路径：随仓库分发不只是隐私问题，
+# 换台机器就成了事实错误。通用说明由 scripts/purpose.py 提供，本机差异由 ticket 补。
+/content/*
+
+# 旧版把 ticket 放在根目录，留一条规则免得它重新冒出来
+/ticket.md
+
+# ===== 构建与调试的临时产物 =====
+*.new
+*.bak
+web/_probe.html
+dist/_*.html
+
+# ===== 本地助手工作目录（含本地记忆、会话记录与路径）=====
+.workbuddy/
+.workbuddy-ai/
+
+# ===== 系统 / 编辑器 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+/output
+/archived

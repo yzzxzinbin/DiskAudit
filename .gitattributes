@@ -1,0 +1,25 @@
+# 换行统一：仓库里一律存 LF，检出时给 Windows 原生的那几类换成 CRLF。
+# 不加下文的语句 core.autocrlf=true 会在每次 add 时警告，
+* text=auto eol=lf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# eol=crlf 只在检出那一刻生效。用编辑器、脚本或补丁工具直接写文件时，
+# git 不参与，写进去什么就是什么 —— 存成 LF 的 .bat 会被 cmd 按字节切行，
+# 一条 rem 注释被劈成两半、后半截当命令执行，连 %errorlevel% 都可能变成
+# orlevel、py.exe 变成 xe"，脚本整体失效却不报错。改完 .bat 要确认每行以 \r\n 结尾。
+
+# .bat 另有一条：必须存成 GBK（cp936）无 BOM，不要存 UTF-8。
+# cmd.exe 按 ANSI 代码页读批处理，UTF-8 无 BOM 的中文会错位，
+# 而且会把一条 rem 注释从中间劈开、后半截当命令执行，报
+# 「'xxx' 不是内部或外部命令」—— 命令行本身还是 ASCII，所以脚本照常跑完，
+# 只是每次多刷两条错，很容易被忽略。git 不做编码转换，GBK 字节原样进出。
+# .ps1 相反，必须是 UTF-8 **带** BOM（Windows PowerShell 5.1 按 ANSI 解码）。
+
+# 二进制，不做任何转换
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
