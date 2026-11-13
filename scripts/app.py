@@ -1008,7 +1008,20 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
+# 默认端口被占就往后顺延，最多试这么多个。双击 start.bat 的人不该被一个端口号挡住；
+# 显式写了 --port 则严格按指定的来（脚本 / 书签 / 防火墙可能写死了它）。
+DEFAULT_PORT = 8765
+PORT_TRIES = 20
+
+
 def port_free(port, host="127.0.0.1"):
+    """裸 bind 探一次。
+
+    故意不加 SO_REUSEADDR：HTTPServer 会加，而 Windows 上两个都加了
+    SO_REUSEADDR 的 socket 能绑同一个端口。用裸 bind 当占位探测器更保守 ——
+    只要有人占着（哪怕它自己开了 reuse），这里就会说「不空」，随后顺延，
+    避免第二个服务悄悄抢到同一端口。
+    """
     s = socket.socket()
     try:
         s.bind((host, port))
@@ -1023,11 +1036,90 @@ def probe_running(port):
     """端口被占了 —— 问一句是谁。是本服务就返回它的 /api/health，否则 None。"""
     import urllib.request
     try:
-        with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port, timeout=1.5) as r:
+        with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port,
+                                    timeout=0.8) as r:
             d = json.loads(r.read().decode("utf-8"))
     except Exception:
         return None
     return d if d.get("service") == "DiskAudit" else None
+
+
+def first_free_port(want, host, tries=PORT_TRIES, free=None):
+    """从 want 起找第一个空闲端口，找不到返回 None。free 可注入，便于测试。"""
+    free = free or port_free
+    for p in range(want, want + max(1, tries)):
+        if free(p, host):
+            return p
+    return None
+
+
+def choose_port(want, host, strict=False, tries=PORT_TRIES,
+                free=None, probe=None, data_dir=None):
+    """启动前决定用哪个端口。返回 {action, port, from, why}。
+
+      ok     直接起在 port 上
+      reuse  顺延路上撞见同一个 DiskAudit —— 别起第二个，开浏览器就行
+      moved  被占且允许顺延，改用 port（from 是原端口）
+      fail   显式端口被占 / 一段端口全满，why 是可直接打印的原因
+
+    纯逻辑：探测函数都能注入，测试不用真的占端口。strict（显式 --port）只看
+    指定的那一个端口，不会顺延、也不会去别的端口找自己的实例。
+    """
+    free = free or port_free
+    probe = probe or probe_running
+    mine = data_dir if data_dir is not None else DATA
+
+    def same_instance(info):
+        other = (info or {}).get("dataDir") or ""
+        return not other or (os.path.normcase(os.path.abspath(other)) ==
+                             os.path.normcase(os.path.abspath(mine)))
+
+    # 只探「被占着」的端口：空闲端口不可能有服务在跑，省掉 20 次 HTTP 往返。
+    # 顺延路上也要找自己的实例 —— 默认端口被别的程序占、自己的服务落在 8766 时，
+    # 再双击一次不该又在 8767 起一个重复进程。
+    span = 1 if strict else max(1, tries)
+    first_free, other_note = None, ""
+    for p in range(want, want + span):
+        if free(p, host):
+            first_free = p
+            break
+        info = probe(p)
+        if info and same_instance(info):
+            return {"action": "reuse", "port": p, "from": None,
+                    "why": "同一个 DiskAudit 已经在跑"}
+        if p == want and info:
+            other_note = "端口 %d 上跑着另一个 DiskAudit（%s）" % (
+                p, info.get("dataDir") or "未知数据目录")
+
+    if first_free == want:
+        return {"action": "ok", "port": want, "from": None, "why": ""}
+    if strict:
+        return {"action": "fail", "port": want, "from": None,
+                "why": "端口 %d 被占用（显式 --port，不自动改端口）" % want}
+    if first_free is None:
+        return {"action": "fail", "port": want, "from": None,
+                "why": "端口 %d~%d 全被占用" % (want, want + span - 1)}
+    return {"action": "moved", "port": first_free, "from": want,
+            "why": other_note or "端口 %d 被别的程序占用" % want}
+
+
+def bind_server(host, first, tries=PORT_TRIES, factory=None, free=None):
+    """真正 bind：准备阶段可能耗时几分钟，期间端口可能被人抢走，逐个重试。
+
+    每次先用裸 bind 探一遍再构造 HTTPServer —— 光靠构造时抛异常不够，
+    HTTPServer 带 SO_REUSEADDR，Windows 上会绑到别人已占的端口还不报错。
+    返回 (server, port)；全失败返回 (None, None)。free 可注入，便于测试。
+    """
+    factory = factory or ThreadingHTTPServer
+    free = free or port_free
+    for p in range(first, first + max(1, tries)):
+        if not free(p, host):
+            continue
+        try:
+            return factory((host, p), Handler), p
+        except OSError:
+            continue
+    return None, None
 
 
 def need_drive_pick(update, rescan, skip_scan, drive, no_ask, has_tree, tty):
@@ -1280,7 +1372,9 @@ def run_update(skip_scan=False, quiet=False, limit=ticket.LIMIT, scan_args=None,
 def main():
     ap = argparse.ArgumentParser(description="DiskAudit：启动编排 + 本地服务")
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=None, metavar="N",
+                    help="监听端口，默认 8765；默认端口被占会自动顺延，"
+                         "显式指定则严格按它来")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--update", action="store_true",
                     help="只刷新数据与文字层，不起服务（会先问扫哪个盘）")
@@ -1359,22 +1453,26 @@ def main():
         return run_update(a.skip_scan, a.quiet, a.limit, scan_args,
                           not a.no_build)
 
-    # 端口先查 —— 别扫了十分钟才发现端口被占
-    if not port_free(a.port, a.host):
-        info = probe_running(a.port)
-        if info:
-            other = info.get("dataDir") or ""
-            if other and os.path.normcase(os.path.abspath(other)) != os.path.normcase(DATA):
-                print("  端口 %d 上跑着另一个 DiskAudit：%s" % (a.port, other))
-                print("  换一个端口再启动：start.bat --port 8766")
-                return 1
-            url = "http://%s:%d/" % (a.host, a.port)
-            print("服务已经在跑：%s" % url)
-            if not a.no_browser:
-                webbrowser.open(url)
-            return 0
-        print("[fatal] 端口 %d 被别的程序占用了，换一个：--port 8766" % a.port)
+    # 端口先查 —— 别扫了十分钟才发现端口被占。
+    # 默认端口被占则顺延到空闲端口；显式 --port 严格按用户写的来（不静默换端口）。
+    explicit_port = a.port is not None
+    want_port = a.port if explicit_port else DEFAULT_PORT
+    dec = choose_port(want_port, a.host, strict=explicit_port)
+    if dec["action"] == "reuse":
+        url = "http://%s:%d/" % (a.host, dec["port"])
+        print("服务已经在跑：%s" % url)
+        if not a.no_browser:
+            webbrowser.open(url)
+        return 0
+    if dec["action"] == "fail":
+        print("[fatal] %s" % dec["why"])
+        hint = first_free_port(want_port + 1, a.host)
+        print("  换一个端口再启动：start.bat --port %s"
+              % (hint if hint else "<空闲端口>"))
         return 1
+    if dec["action"] == "moved":
+        print("  %s，改用 %d" % (dec["why"], dec["port"]))
+    a.port = dec["port"]
 
     if a.rescan and not a.skip_scan:
         print("  重新扫描 …")
@@ -1398,7 +1496,14 @@ def main():
               "要看 %s 用页面右上角的磁盘按钮切换。" % (want, served or "—", want))
 
     st = sources_state()
-    httpd = ThreadingHTTPServer((a.host, a.port), Handler)
+    # 端口检查是在 ensure() 之前做的，中间可能扫了几分钟 —— 这里重新 bind 一次。
+    # 顺延时逐个重试；显式 --port 只试它自己那一个，别偷偷换掉用户指定的端口。
+    httpd, a.port = bind_server(a.host, a.port,
+                                tries=1 if explicit_port else PORT_TRIES)
+    if httpd is None:
+        print("[fatal] 端口 %d 在启动过程中被占用了（或连续 %d 个端口都占着），"
+              "指定一个空闲端口：start.bat --port <端口>" % (a.port, PORT_TRIES))
+        return 1
     httpd.daemon_threads = True
     httpd.verbose = a.verbose
     url = "http://%s:%d/" % (a.host, a.port)

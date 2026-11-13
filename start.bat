@@ -25,7 +25,17 @@ exit /b 1
 
 :run
 %PY% "scripts\app.py" %*
-if %errorlevel% neq 0 (
+set "RC=%errorlevel%"
+
+rem 端口被占时 app.py 会自动顺延（显式 --port 除外）；只有真起不来才停在这里。
+rem 这里必须把退出码传出去，否则 pause 会把 errorlevel 洗成 0，脚本里调用看不出失败。
+if %RC% neq 0 (
   echo.
-  pause
+  echo   启动失败，退出码 %RC%。具体原因见上方。
+  rem 和 update.bat 一个口径：带参数是脚本调用，直接退，别卡在 pause 等人按键。
+  if "%~1"=="" (
+    echo   按任意键关闭。
+    pause >nul
+  )
 )
+exit /b %RC%

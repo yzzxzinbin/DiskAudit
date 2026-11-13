@@ -350,5 +350,97 @@ class HintLayerTest(unittest.TestCase):
         self.assertGreater(self.zindex(".hint"), self.zindex(".tip"))
 
 
+class PortChoiceTest(unittest.TestCase):
+    """端口占用时的决策：默认端口顺延、显式端口不让步、自己的实例不重复起。"""
+
+    def free_except(self, *busy):
+        return lambda p, h: p not in busy
+
+    def test_free_port_is_used_as_is(self):
+        d = app.choose_port(8765, "127.0.0.1", free=lambda p, h: True)
+        self.assertEqual(("ok", 8765), (d["action"], d["port"]))
+
+    def test_default_port_occupied_moves_on(self):
+        d = app.choose_port(8765, "127.0.0.1",
+                            free=self.free_except(8765, 8766),
+                            probe=lambda p: None)
+        self.assertEqual(("moved", 8767), (d["action"], d["port"]))
+        self.assertEqual(8765, d["from"])
+
+    def test_explicit_port_occupied_is_refused(self):
+        d = app.choose_port(9000, "127.0.0.1", strict=True,
+                            free=self.free_except(9000),
+                            probe=lambda p: None)
+        self.assertEqual("fail", d["action"])
+        self.assertEqual(9000, d["port"])
+
+    def test_own_running_instance_is_reused_not_duplicated(self):
+        d = app.choose_port(8765, "127.0.0.1",
+                            free=self.free_except(8765),
+                            probe=lambda p: {"service": "DiskAudit", "dataDir": app.DATA},
+                            data_dir=app.DATA)
+        self.assertEqual("reuse", d["action"])
+
+    def test_other_datadir_instance_moves_on(self):
+        d = app.choose_port(8765, "127.0.0.1",
+                            free=self.free_except(8765),
+                            probe=lambda p: {"service": "DiskAudit",
+                                             "dataDir": r"X:\somewhere\else"},
+                            data_dir=app.DATA)
+        self.assertEqual(("moved", 8766), (d["action"], d["port"]))
+
+    def test_own_instance_on_fallback_port_is_reused(self):
+        """默认端口被别的程序占、自己跑在 8766：再双击不该在 8767 起第三个进程。"""
+        def probe(p):
+            return {"service": "DiskAudit", "dataDir": app.DATA} if p == 8766 else None
+        d = app.choose_port(8765, "127.0.0.1", tries=4,
+                            free=lambda p, h: p >= 8767, probe=probe,
+                            data_dir=app.DATA)
+        self.assertEqual(("reuse", 8766), (d["action"], d["port"]))
+
+    def test_all_ports_busy_fails(self):
+        free = lambda p, h: False
+        d = app.choose_port(8765, "127.0.0.1", tries=3,
+                            free=free, probe=lambda p: None)
+        self.assertEqual("fail", d["action"])
+        self.assertIn("8767", d["why"])
+
+    def test_first_free_port_respects_tries(self):
+        self.assertEqual(3, app.first_free_port(1, "h", tries=5,
+                                                free=lambda p, h: p == 3))
+        self.assertIsNone(app.first_free_port(1, "h", tries=5,
+                                              free=lambda p, h: False))
+
+
+class BindRetryTest(unittest.TestCase):
+    """准备阶段跑了很久之后，原本选好的端口可能已经被抢走。"""
+
+    def test_skips_ports_taken_in_between(self):
+        def factory(addr, handler):
+            return "server@%d" % addr[1]
+        srv, port = app.bind_server("h", 8765, tries=4, factory=factory,
+                                    free=lambda p, h: p != 8765)
+        self.assertEqual(("server@8766", 8766), (srv, port))
+
+    def test_constructor_failure_falls_through(self):
+        calls = []
+
+        def factory(addr, handler):
+            calls.append(addr[1])
+            if addr[1] == 8765:
+                raise OSError("bind race")
+            return "ok"
+        srv, port = app.bind_server("h", 8765, tries=3, factory=factory,
+                                    free=lambda p, h: True)
+        self.assertEqual(("ok", 8766), (srv, port))
+        self.assertEqual([8765, 8766], calls)
+
+    def test_all_busy_returns_none(self):
+        srv, port = app.bind_server("h", 8765, tries=3,
+                                    factory=lambda a, h: "never",
+                                    free=lambda p, h: False)
+        self.assertEqual((None, None), (srv, port))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -63,7 +63,8 @@ Windows 磁盘空间分析工具。只读扫描目录树，按体积排序，生
 参数直接透传：
 
 ```powershell
-start.bat --port 9000            # 换端口
+start.bat                        # 默认 8765；被占用时自动顺延到 8766、8767 …
+start.bat --port 9000            # 指定端口（严格用这个，被占就直接报错）
 start.bat --no-browser           # 不打开浏览器
 start.bat -v                     # 打印每个请求
 update.bat --skip-scan           # 不重扫，只刷新文字层
@@ -599,8 +600,13 @@ ticket 列出它。
 
 **提示端口上跑着另一个 DiskAudit**
 
-该端口上已有实例，但数据目录不是当前这个。通常是上次未正常退出，换个端口即可：
-`start.bat --port 8766`。
+默认端口 8765 被别的程序占用时，`start.bat` 会自动顺延到下一个空闲端口，并在窗口里
+打印实际地址（浏览器也开在新地址上），不用手动换端口。顺延路上如果遇到**本目录**已经
+在跑的 DiskAudit，就直接打开它、不再起第二个进程。
+
+显式写了 `--port 9000` 则严格按指定端口来：被占就报错并给出可用的替代端口，不会
+静默换掉 —— 脚本、书签、防火墙规则可能写死了它。报「端口 9000 被占用」时按提示
+换一个即可。
 
 **能否把服务开放给别人**
 
@@ -624,7 +630,7 @@ python scripts\test_drill.py      # 动态下钻、路径安全、扫描参数�
 python scripts\test_scan.py       # 目录树扫描：合并/独立细化等价、junction、深索引（15 项）
 python scripts\test_history.py    # 快照归档/清理、两版对比、深层指认、趋势矩阵（29 项）
 python scripts\test_storage.py    # 盘根归一、目录键、current / active 指针（17 项）
-python scripts\test_app.py        # 留档删除守卫、活动盘记忆、离线多盘打包、提示层级（23 项）
+python scripts\test_app.py        # 留档删除守卫、活动盘记忆、离线多盘打包、提示层级、端口顺延与 bind 重试（34 项）
 python scripts\test_ticket.py     # ticket 生成：数据读不全时不删旧 ticket（5 项）
 python scripts\test_volumes.py    # 盘符归一、细化根推导、阶段识别、本机磁盘枚举（12 项）
 python scripts\selftest.py        # 路径形态：heal 幂等、模板占位符展开、家目录取值
