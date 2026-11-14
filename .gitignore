@@ -19,7 +19,7 @@ venv/
 # content/drives/<盘>/report.json   报告文案骨架，report.seed() 按本次扫描现生成。
 # content/drives/<盘>/ticket.md     该盘的缺口清单，启动时现生成，补完自己消失。
 # content/linkextra.json            扫描器的可选输入（额外要测量的联接点），本机路径。
-#                       格式见 README「linkextra.json 有什么用」。
+#                       格式见 docs/content-layer.md「linkextra.json」一节。
 # 这些文件都写着具体机器的软件清单、体积与真实路径：随仓库分发不只是隐私问题，
 # 换台机器就成了事实错误。通用说明由 scripts/purpose.py 提供，本机差异由 ticket 补。
 /content/*
